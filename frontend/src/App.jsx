@@ -8,12 +8,14 @@ function App() {
   const [editingDoener, setEditingDoener] = useState(null)
   const [formData, setFormData] = useState({ name: "", street: "", plz: "" })
 
+  const API_URL = process.env.REACT_APP_API_URL  // ← Hier ist jetzt dein Render-Backend
+
   useEffect(() => {
     fetchDoener()
   }, [])
 
   const fetchDoener = () => {
-    fetch("http://localhost:5000/api/doener")
+    fetch(`${API_URL}/api/doener`)
       .then(res => res.json())
       .then(data => setDoener(data))
       .catch(err => console.error(err))
@@ -24,7 +26,7 @@ function App() {
   }
 
   const getCoordinates = async (address) => {
-    const res = await fetch(`http://localhost:5000/api/geocode?address=${encodeURIComponent(address)}`)
+    const res = await fetch(`${API_URL}/api/geocode?address=${encodeURIComponent(address)}`)
     const data = await res.json()
     if (data.length > 0) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) }
     return null
@@ -43,8 +45,8 @@ function App() {
     const payload = { name: formData.name, location, coordinates }
 
     const url = editingDoener
-      ? `http://localhost:5000/api/doener/${editingDoener._id}`
-      : "http://localhost:5000/api/doener"
+      ? `${API_URL}/api/doener/${editingDoener._id}`
+      : `${API_URL}/api/doener`
 
     const method = editingDoener ? "PUT" : "POST"
 
