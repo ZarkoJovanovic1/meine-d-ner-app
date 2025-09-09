@@ -8,8 +8,7 @@ function App() {
   const [editingDoener, setEditingDoener] = useState(null)
   const [formData, setFormData] = useState({ name: "", street: "", plz: "" })
 
-  const API_URL = process.env.REACT_APP_API_URL  // ← Hier ist jetzt dein Render-Backend
-
+  const API_URL = process.env.REACT_APP_API_URL  
   useEffect(() => {
     fetchDoener()
   }, [])
