@@ -50,5 +50,16 @@ app.put("/api/doener/:id", async (req, res) => {
   }
 })
 
+app.delete("/api/doener/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Doener.findByIdAndDelete(id);
+    res.status(204).send();
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server läuft auf Port ${PORT}`))

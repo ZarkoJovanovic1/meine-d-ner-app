@@ -1,3 +1,4 @@
+import { listDoener, createDoener, updateDoener, deleteDoener } from "./api";
 import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import L from "leaflet";
@@ -170,36 +171,63 @@ export default function App() {
     setSelectForEditId(shop.id);
   }
 
-  function upsertShop(e) {
-    e.preventDefault();
-    if (!form.name) return alert("Name ist erforderlich.");
-    const newShop = {
-      id: form.id || crypto.randomUUID(),
-      name: form.name,
-      street: form.street,
-      plz: form.plz,
-      lat: Number(form.lat),
-      lng: Number(form.lng),
-      image: form.image || FALLBACK_IMG,
-      ratings: form.ratings || [],
-    };
+  async function upsertShop(e) {
+  e.preventDefault();
+  if (!form.name) return alert("Name ist erforderlich.");
+
+  // UI -> Backend Payload
+  const payload = {
+    name: form.name,
+    location: [form.street, form.plz].filter(Boolean).join(" · "),
+    lat: Number(form.lat),
+    lng: Number(form.lng),
+    image: form.image || FALLBACK_IMG,
+    bewertung:
+      Array.isArray(form.ratings) && form.ratings.length
+        ? Math.round((form.ratings.reduce((a, b) => a + b, 0) / form.ratings.length) * 10) / 10
+        : 3,
+  };
+
+  try {
+    let saved;
+    if (form.id) {
+      // UPDATE
+      saved = await updateDoener(form.id, payload);
+    } else {
+      // CREATE
+      saved = await createDoener(payload);
+    }
+
+    // Backend → UI Mapping
+    const mapped = mapDoenerToShop(saved);
     setShops((prev) => {
-      const idx = prev.findIndex((s) => s.id === newShop.id);
-      if (idx >= 0) {
+      const i = prev.findIndex((s) => s.id === mapped.id);
+      if (i >= 0) {
         const copy = [...prev];
-        copy[idx] = { ...copy[idx], ...newShop };
+        copy[i] = mapped;
         return copy;
       }
-      return [...prev, newShop];
+      return [...prev, mapped];
     });
     resetForm();
+  } catch (err) {
+    console.error(err);
+    alert("Speichern fehlgeschlagen.");
   }
+}
 
-  function deleteShop(id) {
-    if (!confirm("Diesen Laden wirklich löschen?")) return;
+
+  async function deleteShop(id) {
+  if (!confirm("Diesen Laden wirklich löschen?")) return;
+  try {
+    await deleteDoener(id);
     setShops((prev) => prev.filter((s) => s.id !== id));
     if (selectForEditId === id) resetForm();
+  } catch (err) {
+    console.error(err);
+    alert("Löschen fehlgeschlagen.");
   }
+}
 
   function rateShop(id, stars) {
     setShops((prev) =>
