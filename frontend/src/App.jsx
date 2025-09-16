@@ -74,12 +74,11 @@ function mapDoenerToShop(d) {
     id: d._id,
     name: d.name,
     street: d.location || "",
-    plz: "", // optional leer; du kannst aus location später PLZ/Ort parsen
+    plz: "",
     lat: d.coordinates?.lat ?? 0,
     lng: d.coordinates?.lng ?? 0,
     image: d.image || FALLBACK_IMG,
-    // Backend hat "bewertung" als Zahl -> für dein UI nutzen wir ein Array
-    ratings: Number.isFinite(d.bewertung) ? [d.bewertung] : [],
+    bewertung: Array.isArray(d.ratings) ? d.ratings : [], // 👈 jetzt safe
   };
 }
 

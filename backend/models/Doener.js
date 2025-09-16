@@ -4,8 +4,8 @@ const doenerSchema = new mongoose.Schema({
   name: { type: String, required: true },
   location: { type: String, required: true },
   coordinates: { lat: Number, lng: Number },
-  image: { type: String, default: "" },           
-  bewertung: { type: Number, min: 1, max: 5, default: 3 }
+  image: { type: String, default: "" },
+  ratings: { type: [Number], default: [] }  // 👈 Array von Zahlen
 });
 
 module.exports = mongoose.model("Doener", doenerSchema);
