@@ -6,7 +6,9 @@ const doenerSchema = new mongoose.Schema({
   coordinates: {
     lat: Number,
     lng: Number
-  }
+  },
+  // ⭐ Bewertung INS Schema einfügen
+  bewertung: { type: Number, min: 1, max: 5, default: 3 }
 });
 
 module.exports = mongoose.model("Doener", doenerSchema);
