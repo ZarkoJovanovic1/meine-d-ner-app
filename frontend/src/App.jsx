@@ -1,22 +1,10 @@
-
 import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
 
-/**
- * --- Funktionen laut Nutzerwunsch ---
- * 1) Marker sichtbar (richtiges Icon, keine Rechtecke)
- * 2) Login-Funktion mit 2 Konten:
- *    - Admin: admin/admin  -> Läden anlegen / ändern / löschen / bearbeiten
- *    - User:  user/user    -> Läden bewerten
- * 3) Läden haben ein Bild + Sternebewertung (fiktive Bewertungen + Durchschnitt)
- *
- * Implementierung: rein Frontend (LocalStorage). Kein Backend notwendig.
- */
-
-// ✅ Leaflet Standard-Icon fixen (Vite benötigt explizite URLs)
+// ✅ Leaflet-Icon fix
 const DefaultIcon = L.icon({
   iconUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png",
   iconRetinaUrl: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -28,70 +16,9 @@ const DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// ---- Typen ----
-/**
- * DoenerShop = {
- *   id: string,
- *   name: string,
- *   street: string,
- *   plz: string,
- *   lat: number,
- *   lng: number,
- *   image: string,            // Bild-URL
- *   ratings: number[],        // einzelne Bewertungen 1..5
- * }
- */
-
-const LS_KEY = "doenerfinder_shops_v1";
 const LS_USER = "doenerfinder_user_v1";
-
-const seedData = [
-  {
-    id: crypto.randomUUID(),
-    name: "Döner Palast",
-    street: "Hauptstrasse 12",
-    plz: "8001 Zürich",
-    lat: 47.3769, lng: 8.5417,
-    image: "https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop",
-    ratings: [5, 4, 4, 5],
-  },
-  {
-    id: crypto.randomUUID(),
-    name: "Istanbul Grill",
-    street: "Bahnhofstrasse 55",
-    plz: "4051 Basel",
-    lat: 47.5596, lng: 7.5886,
-    image: "https://images.unsplash.com/photo-1604908176997-4316512b6922?q=80&w=1200&auto=format&fit=crop",
-    ratings: [3, 4, 5, 3, 4],
-  },
-  {
-    id: crypto.randomUUID(),
-    name: "Anatolia Kebap",
-    street: "Kaiser-Josef-Str. 7",
-    plz: "79098 Freiburg",
-    lat: 47.9961, lng: 7.8494,
-    image: "https://images.unsplash.com/photo-1611511549347-0f2c0c6daeb9?q=80&w=1200&auto=format&fit=crop",
-    ratings: [4, 4, 4],
-  },
-];
-
-function loadShops() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) {
-      localStorage.setItem(LS_KEY, JSON.stringify(seedData));
-      return seedData;
-    }
-    const parsed = JSON.parse(raw);
-    // Falls altes Format: normalisieren
-    return Array.isArray(parsed) ? parsed : seedData;
-  } catch {
-    return seedData;
-  }
-}
-function saveShops(shops) {
-  localStorage.setItem(LS_KEY, JSON.stringify(shops));
-}
+const FALLBACK_IMG =
+  "https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop";
 
 function average(arr) {
   if (!arr || arr.length === 0) return 0;
@@ -99,7 +26,6 @@ function average(arr) {
 }
 
 function StarDisplay({ value }) {
-  // value 0..5 (kann z.B. 4.3 sein)
   const full = Math.floor(value);
   const half = value - full >= 0.5;
   const empty = 5 - full - (half ? 1 : 0);
@@ -141,29 +67,77 @@ function MapClickHelper({ onClick }) {
   return null;
 }
 
+// --- Backend ↔ Frontend Mapping ---
+function mapDoenerToShop(d) {
+  return {
+    id: d._id,
+    name: d.name,
+    street: d.location || "",
+    plz: "", // optional leer; du kannst aus location später PLZ/Ort parsen
+    lat: d.coordinates?.lat ?? 0,
+    lng: d.coordinates?.lng ?? 0,
+    image: d.image || FALLBACK_IMG,
+    // Backend hat "bewertung" als Zahl -> für dein UI nutzen wir ein Array
+    ratings: Number.isFinite(d.bewertung) ? [d.bewertung] : [],
+  };
+}
+
 export default function App() {
-  const [shops, setShops] = useState(loadShops);
+  const [shops, setShops] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
   const [currentUser, setCurrentUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(LS_USER)) || null; } catch { return null; }
+    try {
+      return JSON.parse(localStorage.getItem(LS_USER)) || null;
+    } catch {
+      return null;
+    }
   });
   const [form, setForm] = useState({
-    id: null, name: "", street: "", plz: "",
-    lat: 47.3769, lng: 8.5417, image: ""
+    id: null,
+    name: "",
+    street: "",
+    plz: "",
+    lat: 47.3769,
+    lng: 8.5417,
+    image: "",
   });
   const [selectForEditId, setSelectForEditId] = useState(null);
   const isAdmin = currentUser?.role === "admin";
   const isUser = !!currentUser;
 
-  useEffect(() => saveShops(shops), [shops]);
-  useEffect(() => localStorage.setItem(LS_USER, JSON.stringify(currentUser)), [currentUser]);
-
   const center = useMemo(() => [47.3769, 8.5417], []); // Zürich
+
+  // --- Daten vom Backend laden ---
+  useEffect(() => {
+    const BASE = import.meta.env.VITE_API_URL;
+    async function load() {
+      try {
+        setLoading(true);
+        setErr("");
+        const res = await fetch(`${BASE}/api/doener`);
+        if (!res.ok) throw new Error(`API ${res.status}`);
+        const data = await res.json();
+        setShops(Array.isArray(data) ? data.map(mapDoenerToShop) : []);
+      } catch (e) {
+        console.error(e);
+        setErr("Konnte Daten nicht laden.");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(LS_USER, JSON.stringify(currentUser));
+  }, [currentUser]);
 
   function handleLogin(e) {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const login = (formData.get("login") || "").trim();
-    const pw = (formData.get("password") || "").trim();
+    const fd = new FormData(e.currentTarget);
+    const login = (fd.get("login") || "").trim();
+    const pw = (fd.get("password") || "").trim();
     if (login === "admin" && pw === "admin") {
       setCurrentUser({ name: "Admin", role: "admin" });
     } else if (login === "user" && pw === "user") {
@@ -177,10 +151,20 @@ export default function App() {
   }
 
   function resetForm() {
-    setForm({ id: null, name: "", street: "", plz: "", lat: 47.3769, lng: 8.5417, image: "" });
+    setForm({
+      id: null,
+      name: "",
+      street: "",
+      plz: "",
+      lat: 47.3769,
+      lng: 8.5417,
+      image: "",
+    });
     setSelectForEditId(null);
   }
 
+  // Die folgenden drei Funktionen ändern aktuell nur den Frontend-State.
+  // Wenn du willst, binde ich sie im nächsten Schritt an POST/PUT/DELETE im Backend an.
   function startEdit(shop) {
     setForm({ ...shop });
     setSelectForEditId(shop.id);
@@ -196,7 +180,7 @@ export default function App() {
       plz: form.plz,
       lat: Number(form.lat),
       lng: Number(form.lng),
-      image: form.image || "https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop",
+      image: form.image || FALLBACK_IMG,
       ratings: form.ratings || [],
     };
     setShops((prev) => {
@@ -230,13 +214,23 @@ export default function App() {
         {isUser ? (
           <div className="userbox">
             Eingeloggt als <strong>{currentUser.name}</strong> ({currentUser.role})
-            <button className="btn" onClick={logout}>Logout</button>
+            <button className="btn" onClick={logout}>
+              Logout
+            </button>
           </div>
         ) : (
           <form className="login" onSubmit={handleLogin}>
             <input name="login" placeholder="Login" autoComplete="username" required />
-            <input name="password" type="password" placeholder="Passwort" autoComplete="current-password" required />
-            <button className="btn" type="submit">Login</button>
+            <input
+              name="password"
+              type="password"
+              placeholder="Passwort"
+              autoComplete="current-password"
+              required
+            />
+            <button className="btn" type="submit">
+              Login
+            </button>
             <div className="hint">Admin: admin/admin • User: user/user</div>
           </form>
         )}
@@ -245,6 +239,10 @@ export default function App() {
       <main className="content">
         <section className="left">
           <h2>Läden</h2>
+
+          {loading && <p className="muted">Lade Daten…</p>}
+          {err && <p className="error">{err}</p>}
+
           <ul className="shoplist">
             {shops.map((s) => {
               const avg = average(s.ratings);
@@ -253,14 +251,20 @@ export default function App() {
                   <img src={s.image} alt={s.name} />
                   <div className="shopinfo">
                     <h3>{s.name}</h3>
-                    <div className="muted">{s.street} · {s.plz}</div>
+                    <div className="muted">
+                      {s.street} {s.plz ? `· ${s.plz}` : ""}
+                    </div>
                     <div className="rating">
                       <StarDisplay value={avg} /> <span className="avg">({avg || "0"})</span>
                     </div>
                     {isAdmin && (
                       <div className="row">
-                        <button className="btn sm" onClick={() => startEdit(s)}>Bearbeiten</button>
-                        <button className="btn sm danger" onClick={() => deleteShop(s.id)}>Löschen</button>
+                        <button className="btn sm" onClick={() => startEdit(s)}>
+                          Bearbeiten
+                        </button>
+                        <button className="btn sm danger" onClick={() => deleteShop(s.id)}>
+                          Löschen
+                        </button>
                       </div>
                     )}
                     {isUser && !isAdmin && (
@@ -281,34 +285,66 @@ export default function App() {
               <div className="grid">
                 <label>
                   Name
-                  <input value={form.name} onChange={(e)=>setForm(f=>({...f,name:e.target.value}))} required />
+                  <input
+                    value={form.name}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    required
+                  />
                 </label>
                 <label>
-                  Straße
-                  <input value={form.street} onChange={(e)=>setForm(f=>({...f,street:e.target.value}))} />
+                  Straße / Adresse
+                  <input
+                    value={form.street}
+                    onChange={(e) => setForm((f) => ({ ...f, street: e.target.value }))}
+                  />
                 </label>
                 <label>
                   PLZ/Ort
-                  <input value={form.plz} onChange={(e)=>setForm(f=>({...f,plz:e.target.value}))} />
+                  <input
+                    value={form.plz}
+                    onChange={(e) => setForm((f) => ({ ...f, plz: e.target.value }))}
+                  />
                 </label>
                 <label>
                   Bild-URL
-                  <input value={form.image} onChange={(e)=>setForm(f=>({...f,image:e.target.value}))} placeholder="https://..." />
+                  <input
+                    value={form.image}
+                    onChange={(e) => setForm((f) => ({ ...f, image: e.target.value }))}
+                    placeholder="https://..."
+                  />
                 </label>
                 <label>
                   Breite (lat)
-                  <input type="number" step="0.0001" value={form.lat} onChange={(e)=>setForm(f=>({...f,lat:e.target.value}))} />
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={form.lat}
+                    onChange={(e) => setForm((f) => ({ ...f, lat: e.target.value }))}
+                  />
                 </label>
                 <label>
                   Länge (lng)
-                  <input type="number" step="0.0001" value={form.lng} onChange={(e)=>setForm(f=>({...f,lng:e.target.value}))} />
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={form.lng}
+                    onChange={(e) => setForm((f) => ({ ...f, lng: e.target.value }))}
+                  />
                 </label>
               </div>
               <div className="row">
-                <button className="btn" type="submit">{selectForEditId ? "Speichern" : "Hinzufügen"}</button>
-                {selectForEditId && <button type="button" className="btn ghost" onClick={resetForm}>Abbrechen</button>}
+                <button className="btn" type="submit">
+                  {selectForEditId ? "Speichern" : "Hinzufügen"}
+                </button>
+                {selectForEditId && (
+                  <button type="button" className="btn ghost" onClick={resetForm}>
+                    Abbrechen
+                  </button>
+                )}
               </div>
-              <p className="muted small">Tipp: Klicke in die Karte, um Koordinaten zu übernehmen.</p>
+              <p className="muted small">
+                Tipp: Klicke in die Karte, um Koordinaten zu übernehmen.
+              </p>
             </form>
           )}
         </section>
@@ -319,17 +355,29 @@ export default function App() {
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            <MapClickHelper onClick={(latlng)=>{
-              if (isAdmin) setForm(f=>({...f, lat: latlng.lat.toFixed(4)*1, lng: latlng.lng.toFixed(4)*1 }))
-            }}/>
-            {shops.map((s)=>(
+            <MapClickHelper
+              onClick={(latlng) => {
+                if (isAdmin)
+                  setForm((f) => ({
+                    ...f,
+                    lat: Number(latlng.lat.toFixed(4)),
+                    lng: Number(latlng.lng.toFixed(4)),
+                  }));
+              }}
+            />
+            {shops.map((s) => (
               <Marker position={[s.lat, s.lng]} key={s.id}>
                 <Popup>
                   <div className="popup">
                     <img src={s.image} alt={s.name} />
                     <h3>{s.name}</h3>
-                    <div className="muted">{s.street} · {s.plz}</div>
-                    <div className="rating"><StarDisplay value={average(s.ratings)} /> <span className="avg">({average(s.ratings)||"0"})</span></div>
+                    <div className="muted">
+                      {s.street} {s.plz ? `· ${s.plz}` : ""}
+                    </div>
+                    <div className="rating">
+                      <StarDisplay value={average(s.ratings)} />{" "}
+                      <span className="avg">({average(s.ratings) || "0"})</span>
+                    </div>
                   </div>
                 </Popup>
               </Marker>
