@@ -5,6 +5,7 @@ export async function fetchDoener() {
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 }
+
 export async function listDoener() {
   const r = await fetch(`${BASE}/api/doener`);
   if (!r.ok) throw new Error(`GET failed ${r.status}`);
@@ -12,7 +13,7 @@ export async function listDoener() {
 }
 
 // POST
-export async function createDoener({ name, location, lat, lng, image, bewertung }) {
+export async function createDoener({ name, location, lat, lng, image, ratings = [] }) {
   const r = await fetch(`${BASE}/api/doener`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -21,7 +22,7 @@ export async function createDoener({ name, location, lat, lng, image, bewertung 
       location,
       coordinates: { lat, lng },
       image,
-      bewertung
+      ratings
     })
   });
   if (!r.ok) throw new Error(`POST failed ${r.status}`);
@@ -29,7 +30,7 @@ export async function createDoener({ name, location, lat, lng, image, bewertung 
 }
 
 // PUT
-export async function updateDoener(id, { name, location, lat, lng, image, bewertung }) {
+export async function updateDoener(id, { name, location, lat, lng, image, ratings }) {
   const r = await fetch(`${BASE}/api/doener/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -38,10 +39,21 @@ export async function updateDoener(id, { name, location, lat, lng, image, bewert
       location,
       coordinates: { lat, lng },
       image,
-      bewertung
+      ...(typeof ratings !== "undefined" ? { ratings } : {}) // nur senden, wenn vorhanden
     })
   });
   if (!r.ok) throw new Error(`PUT failed ${r.status}`);
+  return r.json();
+}
+
+// RATE (neu)
+export async function rateDoener(id, stars) {
+  const r = await fetch(`${BASE}/api/doener/${id}/rate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stars }) // wichtig: Feldname heißt "stars"
+  });
+  if (!r.ok) throw new Error(`RATE failed ${r.status}`);
   return r.json();
 }
 

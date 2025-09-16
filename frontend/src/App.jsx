@@ -1,4 +1,4 @@
-import { listDoener, createDoener, updateDoener, deleteDoener } from "./api";
+import { createDoener, updateDoener, deleteDoener, rateDoener } from "./api";
 import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import L from "leaflet";
@@ -78,7 +78,7 @@ function mapDoenerToShop(d) {
     lat: d.coordinates?.lat ?? 0,
     lng: d.coordinates?.lng ?? 0,
     image: d.image || FALLBACK_IMG,
-    bewertung: Array.isArray(d.ratings) ? d.ratings : [], // 👈 jetzt safe
+    ratings: Array.isArray(d.ratings) ? d.ratings : [],
   };
 }
 
@@ -101,6 +101,7 @@ export default function App() {
     lat: 47.3769,
     lng: 8.5417,
     image: "",
+    ratings: [],
   });
   const [selectForEditId, setSelectForEditId] = useState(null);
   const isAdmin = currentUser?.role === "admin";
@@ -159,79 +160,89 @@ export default function App() {
       lat: 47.3769,
       lng: 8.5417,
       image: "",
+      ratings: [],
     });
     setSelectForEditId(null);
   }
 
-  // Die folgenden drei Funktionen ändern aktuell nur den Frontend-State.
-  // Wenn du willst, binde ich sie im nächsten Schritt an POST/PUT/DELETE im Backend an.
   function startEdit(shop) {
     setForm({ ...shop });
     setSelectForEditId(shop.id);
   }
 
+  // CREATE / UPDATE
   async function upsertShop(e) {
-  e.preventDefault();
-  if (!form.name) return alert("Name ist erforderlich.");
+    e.preventDefault();
+    if (!form.name) return alert("Name ist erforderlich.");
 
-  // UI -> Backend Payload
-  const payload = {
-    name: form.name,
-    location: [form.street, form.plz].filter(Boolean).join(" · "),
-    lat: Number(form.lat),
-    lng: Number(form.lng),
-    image: form.image || FALLBACK_IMG,
-    bewertung:
-      Array.isArray(form.ratings) && form.ratings.length
-        ? Math.round((form.ratings.reduce((a, b) => a + b, 0) / form.ratings.length) * 10) / 10
-        : 3,
-  };
+    // UI -> Backend Payload
+    const payload = {
+      name: form.name,
+      location: [form.street, form.plz].filter(Boolean).join(" · "),
+      lat: Number(form.lat),
+      lng: Number(form.lng),
+      image: form.image || FALLBACK_IMG,
+      ratings: Array.isArray(form.ratings) ? form.ratings : [],
+    };
 
-  try {
-    let saved;
-    if (form.id) {
-      // UPDATE
-      saved = await updateDoener(form.id, payload);
-    } else {
-      // CREATE
-      saved = await createDoener(payload);
-    }
-
-    // Backend → UI Mapping
-    const mapped = mapDoenerToShop(saved);
-    setShops((prev) => {
-      const i = prev.findIndex((s) => s.id === mapped.id);
-      if (i >= 0) {
-        const copy = [...prev];
-        copy[i] = mapped;
-        return copy;
+    try {
+      let saved;
+      if (form.id) {
+        saved = await updateDoener(form.id, payload);
+      } else {
+        saved = await createDoener(payload);
       }
-      return [...prev, mapped];
-    });
-    resetForm();
-  } catch (err) {
-    console.error(err);
-    alert("Speichern fehlgeschlagen.");
+
+      const mapped = mapDoenerToShop(saved);
+      setShops((prev) => {
+        const i = prev.findIndex((s) => s.id === mapped.id);
+        if (i >= 0) {
+          const copy = [...prev];
+          copy[i] = mapped;
+          return copy;
+        }
+        return [...prev, mapped];
+      });
+      resetForm();
+    } catch (err) {
+      console.error(err);
+      alert("Speichern fehlgeschlagen.");
+    }
   }
-}
 
-
+  // DELETE
   async function deleteShop(id) {
-  if (!confirm("Diesen Laden wirklich löschen?")) return;
-  try {
-    await deleteDoener(id);
-    setShops((prev) => prev.filter((s) => s.id !== id));
-    if (selectForEditId === id) resetForm();
-  } catch (err) {
-    console.error(err);
-    alert("Löschen fehlgeschlagen.");
+    if (!confirm("Diesen Laden wirklich löschen?")) return;
+    try {
+      await deleteDoener(id);
+      setShops((prev) => prev.filter((s) => s.id !== id));
+      if (selectForEditId === id) resetForm();
+    } catch (err) {
+      console.error(err);
+      alert("Löschen fehlgeschlagen.");
+    }
   }
-}
 
-  function rateShop(id, stars) {
-    setShops((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, ratings: [...(s.ratings || []), stars] } : s))
-    );
+  // RATE (optimistic update + /rate Endpoint)
+  async function rateShop(id, stars) {
+    const current = shops.find((s) => s.id === id);
+    if (!current) return;
+
+    const optimistic = [...(current.ratings || []), stars];
+
+    // Optimistisches UI-Update
+    setShops((prev) => prev.map((s) => (s.id === id ? { ...s, ratings: optimistic } : s)));
+
+    try {
+      const saved = await rateDoener(id, stars); // POST /api/doener/:id/rate  {stars}
+      const mapped = mapDoenerToShop(saved);
+      setShops((prev) => prev.map((s) => (s.id === id ? mapped : s)));
+    } catch (err) {
+      console.error(err);
+      alert("Bewertung konnte nicht gespeichert werden.");
+      // Rollback
+      setShops((prev) => prev.map((s) => (s.id === id ? current : s)));
+    }
   }
 
   return (
