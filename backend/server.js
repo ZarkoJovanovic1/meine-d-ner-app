@@ -14,6 +14,19 @@ mongoose.connect(process.env.MONGO_URI)
 
 app.get("/", (req, res) => res.send("API läuft 🚀"))
 
+// Debug: zeigt registrierte Routen
+app.get("/_info", (req, res) => {
+  const routes = [];
+  app._router.stack.forEach((m) => {
+    if (m.route && m.route.path) {
+      const methods = Object.keys(m.route.methods).map((x) => x.toUpperCase());
+      routes.push(`${methods.join(",")} ${m.route.path}`);
+    }
+  });
+  res.json({ hasRateRoute: routes.includes("POST /api/doener/:id/rate"), routes });
+});
+
+
 app.get("/api/doener", async (req, res) => {
   try {
     const doener = await Doener.find()
@@ -55,6 +68,26 @@ app.delete("/api/doener/:id", async (req, res) => {
     const { id } = req.params;
     await Doener.findByIdAndDelete(id);
     res.status(204).send();
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+app.post("/api/doener/:id/rate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stars } = req.body;
+    const v = Number(stars);
+    if (!Number.isFinite(v) || v < 1 || v > 5) {
+      return res.status(400).json({ message: "Ungültige Bewertung (1..5)" });
+    }
+    const updated = await Doener.findByIdAndUpdate(
+      id,
+      { $push: { ratings: v } },
+      { new: true, runValidators: true }
+    );
+    if (!updated) return res.status(404).json({ message: "Nicht gefunden" });
+    res.json(updated);
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
