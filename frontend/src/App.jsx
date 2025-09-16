@@ -1,4 +1,4 @@
-import { createDoener, updateDoener, deleteDoener, rateDoener } from "./api";
+import { createDoener, updateDoener, deleteDoener, rateDoener, addComment } from "./api";
 import { useEffect, useMemo, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import L from "leaflet";
@@ -79,6 +79,7 @@ function mapDoenerToShop(d) {
     lng: d.coordinates?.lng ?? 0,
     image: d.image || FALLBACK_IMG,
     ratings: Array.isArray(d.ratings) ? d.ratings : [],
+    comments: Array.isArray(d.comments) ? d.comments : [], // 👈 Kommentare
   };
 }
 
@@ -102,8 +103,11 @@ export default function App() {
     lng: 8.5417,
     image: "",
     ratings: [],
+    comments: [], // für Admin-Create (leer)
   });
+  const [commentDrafts, setCommentDrafts] = useState({}); // { [shopId]: "text" }
   const [selectForEditId, setSelectForEditId] = useState(null);
+
   const isAdmin = currentUser?.role === "admin";
   const isUser = !!currentUser;
 
@@ -161,6 +165,7 @@ export default function App() {
       lng: 8.5417,
       image: "",
       ratings: [],
+      comments: [],
     });
     setSelectForEditId(null);
   }
@@ -183,6 +188,7 @@ export default function App() {
       lng: Number(form.lng),
       image: form.image || FALLBACK_IMG,
       ratings: Array.isArray(form.ratings) ? form.ratings : [],
+      comments: Array.isArray(form.comments) ? form.comments : [],
     };
 
     try {
@@ -245,6 +251,34 @@ export default function App() {
     }
   }
 
+  // COMMENT (optimistic + POST /comment)
+  async function submitComment(id) {
+    const current = shops.find((s) => s.id === id);
+    if (!current) return;
+    const text = (commentDrafts[id] || "").trim();
+    if (!text) return alert("Bitte einen Kommentar eingeben.");
+
+    const draft = { user: currentUser?.name || "User", text, createdAt: new Date().toISOString() };
+    const optimistic = [...(current.comments || []), draft];
+
+    // Optimistisches UI
+    setShops((prev) => prev.map((s) => (s.id === id ? { ...s, comments: optimistic } : s)));
+    setCommentDrafts((d) => ({ ...d, [id]: "" }));
+
+    try {
+      const BASE = import.meta.env.VITE_API_URL; // not strictly needed here, but consistent
+      const saved = await addComment(id, { user: draft.user, text: draft.text });
+      const mapped = mapDoenerToShop(saved);
+      setShops((prev) => prev.map((s) => (s.id === id ? mapped : s)));
+    } catch (err) {
+      console.error(err);
+      alert("Kommentar konnte nicht gespeichert werden.");
+      // Rollback
+      setShops((prev) => prev.map((s) => (s.id === id ? current : s)));
+      setCommentDrafts((d) => ({ ...d, [id]: text }));
+    }
+  }
+
   return (
     <div className="page">
       <header className="header">
@@ -295,6 +329,7 @@ export default function App() {
                     <div className="rating">
                       <StarDisplay value={avg} /> <span className="avg">({avg || "0"})</span>
                     </div>
+
                     {isAdmin && (
                       <div className="row">
                         <button className="btn sm" onClick={() => startEdit(s)}>
@@ -305,10 +340,70 @@ export default function App() {
                         </button>
                       </div>
                     )}
+
                     {isUser && !isAdmin && (
-                      <div className="ratebox">
-                        <span>Bewerten:</span>
-                        <StarInput onRate={(n) => rateShop(s.id, n)} />
+                      <>
+                        <div className="ratebox">
+                          <span>Bewerten:</span>
+                          <StarInput onRate={(n) => rateShop(s.id, n)} />
+                        </div>
+
+                        {/* Kommentare anzeigen */}
+                        {(s.comments && s.comments.length > 0) && (
+                          <div className="comments">
+                            <div className="comments-title">Kommentare</div>
+                            <ul className="comment-list">
+                              {s.comments.slice().reverse().map((c, idx) => (
+                                <li key={idx} className="comment-item">
+                                  <div className="comment-meta">
+                                    <strong>{c.user || "User"}</strong>{" "}
+                                    <span className="muted small">
+                                      {c.createdAt ? new Date(c.createdAt).toLocaleString() : ""}
+                                    </span>
+                                  </div>
+                                  <div className="comment-text">{c.text}</div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Kommentar-Feld */}
+                        <div className="comment-box">
+                          <textarea
+                            rows={2}
+                            placeholder="Dein Kommentar …"
+                            value={commentDrafts[s.id] || ""}
+                            onChange={(e) =>
+                              setCommentDrafts((d) => ({ ...d, [s.id]: e.target.value }))
+                            }
+                          />
+                          <div className="row">
+                            <button className="btn sm" onClick={() => submitComment(s.id)}>
+                              Kommentar senden
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Für Besucher (nicht eingeloggt): Kommentare nur anzeigen */}
+                    {!isUser && s.comments && s.comments.length > 0 && (
+                      <div className="comments">
+                        <div className="comments-title">Kommentare</div>
+                        <ul className="comment-list">
+                          {s.comments.slice().reverse().map((c, idx) => (
+                            <li key={idx} className="comment-item">
+                              <div className="comment-meta">
+                                <strong>{c.user || "User"}</strong>{" "}
+                                <span className="muted small">
+                                  {c.createdAt ? new Date(c.createdAt).toLocaleString() : ""}
+                                </span>
+                              </div>
+                              <div className="comment-text">{c.text}</div>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                   </div>
@@ -416,6 +511,26 @@ export default function App() {
                       <StarDisplay value={average(s.ratings)} />{" "}
                       <span className="avg">({average(s.ratings) || "0"})</span>
                     </div>
+
+                    {/* Kommentare in der Popup-Karte (nur Anzeige, ohne Eingabe) */}
+                    {(s.comments && s.comments.length > 0) && (
+                      <div className="comments">
+                        <div className="comments-title">Kommentare</div>
+                        <ul className="comment-list">
+                          {s.comments.slice(-3).reverse().map((c, idx) => (
+                            <li key={idx} className="comment-item">
+                              <div className="comment-meta">
+                                <strong>{c.user || "User"}</strong>{" "}
+                                <span className="muted small">
+                                  {c.createdAt ? new Date(c.createdAt).toLocaleString() : ""}
+                                </span>
+                              </div>
+                              <div className="comment-text">{c.text}</div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 </Popup>
               </Marker>

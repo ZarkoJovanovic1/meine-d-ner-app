@@ -63,3 +63,13 @@ export async function deleteDoener(id) {
   if (!r.ok && r.status !== 204) throw new Error(`DELETE failed ${r.status}`);
   return true;
 }
+
+export async function addComment(id, { user, text }) {
+  const r = await fetch(`${BASE}/api/doener/${id}/comment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user, text })
+  });
+  if (!r.ok) throw new Error(`COMMENT failed ${r.status}`);
+  return r.json();
+}
