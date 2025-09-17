@@ -7,11 +7,10 @@ Die App zeigt alle Läden auf einer interaktiven Karte (Leaflet) an und bietet C
 
 ## 🚀 Live Demo
 
-- **Frontend (Vercel):** https://dein-frontend-link.vercel.app  
-- **Backend (Render/Heroku):** https://dein-backend-link.onrender.com  
-- **API Test:** [GET /_info](https://dein-backend-link.onrender.com/_info)
+- **Frontend (Vercel):** https://meine-d-ner-app.vercel.app/
+- **Backend (Render/Heroku):** https://meine-d-ner-app.onrender.com
+- **API Test:** https://meine-d-ner-app.onrender.com/api/doener
 
-*(Bitte mit deinen echten Links ersetzen)*
 
 ---
 
