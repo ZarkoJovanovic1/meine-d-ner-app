@@ -1,18 +1,33 @@
 const mongoose = require("mongoose");
 
-const commentSchema = new mongoose.Schema({
-  user: { type: String, required: true, trim: true },      // Anzeigename (z.B. "User")
-  text: { type: String, required: true, trim: true, maxlength: 1000 },
-  createdAt: { type: Date, default: Date.now },
-}, { _id: false });
+const CommentSchema = new mongoose.Schema(
+  {
+    user: { type: String, required: true },
+    text: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
 
-const doenerSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  location: { type: String, required: true },
-  coordinates: { lat: Number, lng: Number },
-  image: { type: String, default: "" },
-  ratings: { type: [Number], default: [] },
-  comments: { type: [commentSchema], default: [] },        // 👈 NEU
-});
+const DoenerSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    location: { type: String, default: "" },
+    coordinates: {
+      lat: { type: Number, default: 0 },
+      lng: { type: Number, default: 0 },
+    },
+    image: { type: String, default: "" },
+    ratings: { type: [Number], default: [] },
+    comments: { type: [CommentSchema], default: [] },
 
-module.exports = mongoose.model("Doener", doenerSchema);
+    // ✅ NEU: für automatische Importe / Deduplikation
+    source:   { type: String, default: "manual" },          // "manual" | "osm" | "fsq" | ...
+    sourceId: { type: String, unique: true, sparse: true }, // z.B. "node/123"
+  },
+  { timestamps: true }
+);
+
+
+
+module.exports = mongoose.model("Doener", DoenerSchema);

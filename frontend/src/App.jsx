@@ -1,6 +1,6 @@
-import { createDoener, updateDoener, deleteDoener, rateDoener, addComment } from "./api";
+import { createDoener, updateDoener, deleteDoener, rateDoener, addComment, deleteComment } from "./api";
 import { useEffect, useMemo, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./App.css";
@@ -27,14 +27,15 @@ function average(arr) {
 }
 
 function StarDisplay({ value }) {
-  const full = Math.floor(value);
-  const half = value - full >= 0.5;
+  const v = Number.isFinite(value) ? value : 0;
+  const full = Math.floor(v);
+  const half = v - full >= 0.5;
   const empty = 5 - full - (half ? 1 : 0);
   return (
-    <span className="stars" title={`${value} Sterne`}>
+    <span className="stars" title={`${v} Sterne`}>
       {"★".repeat(full)}
       {half ? "☆" : ""}
-      {"✩".repeat(empty)}
+      {"☆".repeat(empty)}
     </span>
   );
 }
@@ -68,10 +69,42 @@ function MapClickHelper({ onClick }) {
   return null;
 }
 
+// Nur Marker mit sinnvollen Koordinaten verwenden
+function isValidCoord(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+}
+
+// Zoomt auf alle Shops, wenn sich die Liste ändert
+function FitToShops({ shops }) {
+  const map = useMap();
+
+  useEffect(() => {
+    // Gültige Punkte sammeln
+    const pts = (shops || [])
+      .filter(s => isValidCoord(s.lat, s.lng))
+      .map(s => [s.lat, s.lng]);
+
+    if (pts.length === 0) {
+      // Fallback: Zürich
+      map.setView([47.3769, 8.5417], 12);
+      return;
+    }
+    if (pts.length === 1) {
+      map.setView(pts[0], 16);         // nah ran bei einem Marker
+      return;
+    }
+    const bounds = L.latLngBounds(pts);
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
+  }, [shops, map]);
+
+  return null;
+}
+
+
 // --- Backend ↔ Frontend Mapping ---
 function mapDoenerToShop(d) {
   return {
-    id: d._id,
+    id: d.id || d._id, // akzeptiere sowohl `id` (toPublic) als auch Mongo `_id`
     name: d.name,
     street: d.location || "",
     plz: "",
@@ -79,21 +112,28 @@ function mapDoenerToShop(d) {
     lng: d.coordinates?.lng ?? 0,
     image: d.image || FALLBACK_IMG,
     ratings: Array.isArray(d.ratings) ? d.ratings : [],
-    comments: Array.isArray(d.comments) ? d.comments : [], // 👈 Kommentare
+    comments: Array.isArray(d.comments) ? d.comments : [],
   };
 }
 
 export default function App() {
   const [shops, setShops] = useState([]);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [showAllComments, setShowAllComments] = useState({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+
+  // Kein Auto-Login für Admin: gespeicherten Admin ignorieren
   const [currentUser, setCurrentUser] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem(LS_USER)) || null;
+      const saved = JSON.parse(localStorage.getItem(LS_USER)) || null;
+   
+      return saved;
     } catch {
       return null;
     }
   });
+
   const [form, setForm] = useState({
     id: null,
     name: "",
@@ -103,7 +143,7 @@ export default function App() {
     lng: 8.5417,
     image: "",
     ratings: [],
-    comments: [], // für Admin-Create (leer)
+    comments: [],
   });
   const [commentDrafts, setCommentDrafts] = useState({}); // { [shopId]: "text" }
   const [selectForEditId, setSelectForEditId] = useState(null);
@@ -134,8 +174,13 @@ export default function App() {
     load();
   }, []);
 
+  // Persistiere nur Nicht-Admin-User; Admin wird entfernt (kein Auto-Login nach Reload)
   useEffect(() => {
-    localStorage.setItem(LS_USER, JSON.stringify(currentUser));
+   if (currentUser) {
+   localStorage.setItem(LS_USER, JSON.stringify(currentUser));
+ } else {
+   localStorage.removeItem(LS_USER);
+   }
   }, [currentUser]);
 
   function handleLogin(e) {
@@ -143,16 +188,23 @@ export default function App() {
     const fd = new FormData(e.currentTarget);
     const login = (fd.get("login") || "").trim();
     const pw = (fd.get("password") || "").trim();
+
     if (login === "admin" && pw === "admin") {
-      setCurrentUser({ name: "Admin", role: "admin" });
+      const u = { name: "Admin", role: "admin" };
+      setCurrentUser(u);
+      try { localStorage.setItem(LS_USER, JSON.stringify(u)); } catch {}
     } else if (login === "user" && pw === "user") {
-      setCurrentUser({ name: "User", role: "user" });
+      const u = { name: "User", role: "user" };
+      setCurrentUser(u);
+      try { localStorage.setItem(LS_USER, JSON.stringify(u)); } catch {}
     } else {
       alert("Falsche Login-Daten");
     }
   }
+
   function logout() {
     setCurrentUser(null);
+    try { localStorage.removeItem(LS_USER); } catch {}
   }
 
   function resetForm() {
@@ -180,7 +232,6 @@ export default function App() {
     e.preventDefault();
     if (!form.name) return alert("Name ist erforderlich.");
 
-    // UI -> Backend Payload
     const payload = {
       name: form.name,
       location: [form.street, form.plz].filter(Boolean).join(" · "),
@@ -216,7 +267,7 @@ export default function App() {
     }
   }
 
-  // DELETE
+  // DELETE SHOP
   async function deleteShop(id) {
     if (!confirm("Diesen Laden wirklich löschen?")) return;
     try {
@@ -229,53 +280,68 @@ export default function App() {
     }
   }
 
-  // RATE (optimistic update + /rate Endpoint)
+  // RATE
   async function rateShop(id, stars) {
     const current = shops.find((s) => s.id === id);
     if (!current) return;
 
     const optimistic = [...(current.ratings || []), stars];
 
-    // Optimistisches UI-Update
     setShops((prev) => prev.map((s) => (s.id === id ? { ...s, ratings: optimistic } : s)));
 
     try {
-      const saved = await rateDoener(id, stars); // POST /api/doener/:id/rate  {stars}
+      const saved = await rateDoener(id, stars);
       const mapped = mapDoenerToShop(saved);
       setShops((prev) => prev.map((s) => (s.id === id ? mapped : s)));
     } catch (err) {
       console.error(err);
       alert("Bewertung konnte nicht gespeichert werden.");
-      // Rollback
       setShops((prev) => prev.map((s) => (s.id === id ? current : s)));
     }
   }
 
-  // COMMENT (optimistic + POST /comment)
+  // COMMENT
   async function submitComment(id) {
     const current = shops.find((s) => s.id === id);
     if (!current) return;
     const text = (commentDrafts[id] || "").trim();
     if (!text) return alert("Bitte einen Kommentar eingeben.");
 
-    const draft = { user: currentUser?.name || "User", text, createdAt: new Date().toISOString() };
+    const draft = { user: currentUser?.name || "Gast", text, createdAt: new Date().toISOString() };
     const optimistic = [...(current.comments || []), draft];
 
-    // Optimistisches UI
     setShops((prev) => prev.map((s) => (s.id === id ? { ...s, comments: optimistic } : s)));
     setCommentDrafts((d) => ({ ...d, [id]: "" }));
 
     try {
-      const BASE = import.meta.env.VITE_API_URL; // not strictly needed here, but consistent
       const saved = await addComment(id, { user: draft.user, text: draft.text });
       const mapped = mapDoenerToShop(saved);
       setShops((prev) => prev.map((s) => (s.id === id ? mapped : s)));
     } catch (err) {
       console.error(err);
       alert("Kommentar konnte nicht gespeichert werden.");
-      // Rollback
       setShops((prev) => prev.map((s) => (s.id === id ? current : s)));
       setCommentDrafts((d) => ({ ...d, [id]: text }));
+    }
+  }
+
+  // DELETE COMMENT (Admin) — jetzt _id-basiert
+  async function handleDeleteComment(shopId, commentId) {
+    try {
+      await deleteComment(shopId, commentId);
+      setShops((prev) =>
+        prev.map((x) => {
+          if (x.id !== shopId) return x;
+          const copy = { ...x, comments: (x.comments || []).slice() };
+          const byId = copy.comments.findIndex((c) => String(c._id) === String(commentId));
+          if (byId !== -1) {
+            copy.comments.splice(byId, 1);
+          }
+          return copy;
+        })
+      );
+    } catch (e) {
+      alert("Kommentar konnte nicht gelöscht werden: " + e.message);
     }
   }
 
@@ -303,7 +369,7 @@ export default function App() {
             <button className="btn" type="submit">
               Login
             </button>
-            <div className="hint">Admin: admin/admin • User: user/user</div>
+
           </form>
         )}
       </header>
@@ -318,6 +384,10 @@ export default function App() {
           <ul className="shoplist">
             {shops.map((s) => {
               const avg = average(s.ratings);
+              const commentList = (s.comments || []).slice().reverse();
+              const expanded = !!showAllComments[s.id];
+              const visible = expanded ? commentList : commentList.slice(0, 3);
+
               return (
                 <li key={s.id} className="shopitem">
                   <img src={s.image} alt={s.name} />
@@ -326,9 +396,23 @@ export default function App() {
                     <div className="muted">
                       {s.street} {s.plz ? `· ${s.plz}` : ""}
                     </div>
+
                     <div className="rating">
-                      <StarDisplay value={avg} /> <span className="avg">({avg || "0"})</span>
-                    </div>
+  {isUser && !isAdmin ? (
+    <StarInput onRate={(n) => rateShop(s.id, n)} />
+  ) : (
+    <StarDisplay value={avg} />
+  )}
+  <span className="avg">
+    {(avg || 0).toFixed(1)} ({s.ratings ? s.ratings.length : 0} Bewertungen)
+  </span>
+</div>
+<p className="credits muted small" style={{ marginTop: 8 }}>
+  Datenquelle: © OpenStreetMap-Mitwirkende — <a
+    href="https://www.openstreetmap.org/copyright"
+    target="_blank" rel="noreferrer"
+  >ODbL</a>
+</p>
 
                     {isAdmin && (
                       <div className="row">
@@ -341,69 +425,66 @@ export default function App() {
                       </div>
                     )}
 
-                    {isUser && !isAdmin && (
-                      <>
-                        <div className="ratebox">
-                          <span>Bewerten:</span>
-                          <StarInput onRate={(n) => rateShop(s.id, n)} />
-                        </div>
-
-                        {/* Kommentare anzeigen */}
-                        {(s.comments && s.comments.length > 0) && (
-                          <div className="comments">
-                            <div className="comments-title">Kommentare</div>
-                            <ul className="comment-list">
-                              {s.comments.slice().reverse().map((c, idx) => (
-                                <li key={idx} className="comment-item">
-                                  <div className="comment-meta">
-                                    <strong>{c.user || "User"}</strong>{" "}
-                                    <span className="muted small">
-                                      {c.createdAt ? new Date(c.createdAt).toLocaleString() : ""}
-                                    </span>
-                                  </div>
-                                  <div className="comment-text">{c.text}</div>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {/* Kommentar-Feld */}
-                        <div className="comment-box">
-                          <textarea
-                            rows={2}
-                            placeholder="Dein Kommentar …"
-                            value={commentDrafts[s.id] || ""}
-                            onChange={(e) =>
-                              setCommentDrafts((d) => ({ ...d, [s.id]: e.target.value }))
-                            }
-                          />
-                          <div className="row">
-                            <button className="btn sm" onClick={() => submitComment(s.id)}>
-                              Kommentar senden
-                            </button>
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                    {/* Für Besucher (nicht eingeloggt): Kommentare nur anzeigen */}
-                    {!isUser && s.comments && s.comments.length > 0 && (
+                    {/* Kommentare */}
+                    {commentList.length > 0 && (
                       <div className="comments">
                         <div className="comments-title">Kommentare</div>
                         <ul className="comment-list">
-                          {s.comments.slice().reverse().map((c, idx) => (
-                            <li key={idx} className="comment-item">
+                          {visible.map((c, idx) => (
+                            <li key={c._id || idx} className="comment-item">
                               <div className="comment-meta">
-                                <strong>{c.user || "User"}</strong>{" "}
-                                <span className="muted small">
+                                <strong className={`username ${c.user === "Gast" ? "guest" : ""}`}>
+                                  {c.user || "Gast"}
+                                </strong>{" "}
+                                <span className="timestamp small">
                                   {c.createdAt ? new Date(c.createdAt).toLocaleString() : ""}
                                 </span>
+                                {isAdmin && (
+                                  <button
+                                    className="btn btn-danger btn-xs"
+                                    style={{ marginLeft: 8 }}
+                                    onClick={() => setConfirmDelete({ shopId: s.id, commentId: c._id })}
+                                  >
+                                    Löschen
+                                  </button>
+                                )}
                               </div>
                               <div className="comment-text">{c.text}</div>
                             </li>
                           ))}
                         </ul>
+
+                        {commentList.length > 3 && (
+                          <button
+                            className="btn btn-link small"
+                            onClick={() =>
+                              setShowAllComments((p) => ({ ...p, [s.id]: !expanded }))
+                            }
+                          >
+                            {expanded
+                              ? "Weniger anzeigen"
+                              : `Alle Kommentare anzeigen (${commentList.length})`}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Kommentar-Feld: nur für eingeloggte User (nicht Admin) */}
+                    {isUser && !isAdmin && (
+                      <div className="comment-box">
+                        <textarea
+                          rows={2}
+                          placeholder="Dein Kommentar …"
+                          value={commentDrafts[s.id] || ""}
+                          onChange={(e) =>
+                            setCommentDrafts((d) => ({ ...d, [s.id]: e.target.value }))
+                          }
+                        />
+                        <div className="row">
+                          <button className="btn sm" onClick={() => submitComment(s.id)}>
+                            Kommentar senden
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -475,15 +556,14 @@ export default function App() {
                   </button>
                 )}
               </div>
-              <p className="muted small">
-                Tipp: Klicke in die Karte, um Koordinaten zu übernehmen.
-              </p>
+              <p className="muted small">Tipp: Klicke in die Karte, um Koordinaten zu übernehmen.</p>
             </form>
           )}
         </section>
 
         <section className="mapwrap">
-          <MapContainer center={center} zoom={7} className="map">
+          <MapContainer center={center} zoom={13} minZoom={3} maxZoom={19} className="map">
+          <FitToShops shops={shops} />
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -509,19 +589,22 @@ export default function App() {
                     </div>
                     <div className="rating">
                       <StarDisplay value={average(s.ratings)} />{" "}
-                      <span className="avg">({average(s.ratings) || "0"})</span>
+                      <span className="avg">
+                        {(average(s.ratings) || 0).toFixed(1)} ({s.ratings ? s.ratings.length : 0} Bewertungen)
+                      </span>
                     </div>
 
-                    {/* Kommentare in der Popup-Karte (nur Anzeige, ohne Eingabe) */}
-                    {(s.comments && s.comments.length > 0) && (
+                    {s.comments && s.comments.length > 0 && (
                       <div className="comments">
                         <div className="comments-title">Kommentare</div>
                         <ul className="comment-list">
                           {s.comments.slice(-3).reverse().map((c, idx) => (
-                            <li key={idx} className="comment-item">
+                            <li key={c._id || idx} className="comment-item">
                               <div className="comment-meta">
-                                <strong>{c.user || "User"}</strong>{" "}
-                                <span className="muted small">
+                                <strong className={`username ${c.user === "Gast" ? "guest" : ""}`}>
+                                  {c.user || "Gast"}
+                                </strong>{" "}
+                                <span className="timestamp small">
                                   {c.createdAt ? new Date(c.createdAt).toLocaleString() : ""}
                                 </span>
                               </div>
@@ -538,6 +621,33 @@ export default function App() {
           </MapContainer>
         </section>
       </main>
+
+      {confirmDelete && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>Kommentar löschen?</h3>
+            <p>
+              Willst du diesen Kommentar wirklich löschen?
+              <br />
+              Diese Aktion kann nicht rückgängig gemacht werden.
+            </p>
+            <div className="row">
+              <button
+                className="btn danger"
+                onClick={() => {
+                  handleDeleteComment(confirmDelete.shopId, confirmDelete.commentId);
+                  setConfirmDelete(null);
+                }}
+              >
+                Löschen
+              </button>
+              <button className="btn ghost" onClick={() => setConfirmDelete(null)}>
+                Abbrechen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
