@@ -18,8 +18,55 @@ const DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 const LS_USER = "doenerfinder_user_v1";
-const FALLBACK_IMG =
-  "https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop";
+// Mehrere Platzhalterbilder
+const FALLBACK_POOL = [
+  "https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop",
+   "https://images.unsplash.com/photo-1615719413546-198b25453f85?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1550547660-d9450f859349?q=80&w=1200&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?q=80&w=1200&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1526318472351-c75fcf070305?q=80&w=1200&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=1200&auto=format&fit=crop",
+  "https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1200&auto=format&fit=crop"
+];
+
+// deterministisch per ID auswählen
+function pickFromPool(id) {
+  const s = String(id || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return FALLBACK_POOL[Math.abs(h) % FALLBACK_POOL.length];
+}
+
+
+
+// (Optional) nahezu eindeutiger Platzhalter pro Laden via Picsum (nicht thematisch garantiert)
+function pickUnique(id) {
+  return `https://picsum.photos/seed/${encodeURIComponent(String(id || ""))}-doener/600/400`;
+}
+// Wandelt problematische Werte in gültige https-URLs um – sonst Fallback
+function normalizeImage(id, raw) {
+  const v = (raw || "").trim();
+
+  // 0) leer -> Platzhalter
+  if (!v) return pickFromPool(id); // oder pickUnique(id)
+
+  // 1) Commons-Dateiname ("File:...") -> echte URL bei Wikimedia
+  if (!/^https?:\/\//i.test(v)) {
+    const name = v.replace(/^File:/i, "").trim();
+    if (name) {
+      return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(name)}?width=800`;
+    }
+    return pickFromPool(id);
+  }
+
+  // 2) http -> https (Mixed Content vermeiden)
+  if (v.startsWith("http://")) return v.replace(/^http:\/\//i, "https://");
+
+  // 3) bereits https -> OK
+  return v;
+}
+
 
 function average(arr) {
   if (!arr || arr.length === 0) return 0;
@@ -102,31 +149,45 @@ function FitToShops({ shops }) {
 
 
 // --- Backend ↔ Frontend Mapping ---
+// --- Backend ↔ Frontend Mapping ---
 function mapDoenerToShop(d) {
+  const id = d.id || d._id;
+
   return {
-    id: d.id || d._id, // akzeptiere sowohl `id` (toPublic) als auch Mongo `_id`
+    id,
     name: d.name,
     street: d.location || "",
     plz: "",
     lat: d.coordinates?.lat ?? 0,
     lng: d.coordinates?.lng ?? 0,
-    image: d.image || FALLBACK_IMG,
+    image: normalizeImage(id, d.image),   // ✅ immer gültige https-URL oder Fallback
     ratings: Array.isArray(d.ratings) ? d.ratings : [],
     comments: Array.isArray(d.comments) ? d.comments : [],
+    source: d.source || "manual",
   };
 }
 
+
+
 export default function App() {
   const [shops, setShops] = useState([]);
+  
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [showAllComments, setShowAllComments] = useState({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+const [favs, setFavs] = useState(new Set());
+const [showOnlyFavs, setShowOnlyFavs] = useState(false);
+
+
+  
 
   // Kein Auto-Login für Admin: gespeicherten Admin ignorieren
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(LS_USER)) || null;
+      const LS_FAV_PREFIX = "doenerfinder_favs_";
+
    
       return saved;
     } catch {
@@ -152,6 +213,8 @@ export default function App() {
   const isUser = !!currentUser;
 
   const center = useMemo(() => [47.3769, 8.5417], []); // Zürich
+
+  
 
   // --- Daten vom Backend laden ---
   useEffect(() => {
@@ -237,7 +300,7 @@ export default function App() {
       location: [form.street, form.plz].filter(Boolean).join(" · "),
       lat: Number(form.lat),
       lng: Number(form.lng),
-      image: form.image || FALLBACK_IMG,
+     image: (form.image || "").trim(),
       ratings: Array.isArray(form.ratings) ? form.ratings : [],
       comments: Array.isArray(form.comments) ? form.comments : [],
     };
@@ -390,7 +453,13 @@ export default function App() {
 
               return (
                 <li key={s.id} className="shopitem">
-                  <img src={s.image} alt={s.name} />
+                 <img
+  src={s.image}
+  alt={s.name}
+  referrerPolicy="no-referrer"
+  onError={() => handleImageError(s.id)}
+/>
+
                   <div className="shopinfo">
                     <h3>{s.name}</h3>
                     <div className="muted">
@@ -582,7 +651,14 @@ export default function App() {
               <Marker position={[s.lat, s.lng]} key={s.id}>
                 <Popup>
                   <div className="popup">
-                    <img src={s.image} alt={s.name} />
+                    <img
+  src={s.image}
+  alt={s.name}
+  referrerPolicy="no-referrer"
+  onError={() => handleImageError(s.id)}
+  
+/>
+
                     <h3>{s.name}</h3>
                     <div className="muted">
                       {s.street} {s.plz ? `· ${s.plz}` : ""}
