@@ -8,6 +8,7 @@ Die App zeigt alle Läden auf einer interaktiven Karte (Leaflet) an und bietet C
 ## 🚀 Live Demo
 
 - **Frontend (Vercel):** https://meine-d-ner-app.vercel.app/
+- Zugangsdaten: user / user -> kommentieren, bewerten   admin/admin -> Komm. löschen, Laden löschen, Laden hinzufügen
 - **Backend (Render/Heroku):** https://meine-d-ner-app.onrender.com
 - **API Test:** https://meine-d-ner-app.onrender.com/api/doener
 
